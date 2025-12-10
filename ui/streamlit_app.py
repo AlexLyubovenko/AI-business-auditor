@@ -1,9 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import json
 import os
 import sys
@@ -584,43 +581,12 @@ def show_basic_analysis(df):
                     trends_df = pd.DataFrame(results['trends'])
                     st.dataframe(trends_df, use_container_width=True)
 
-                    if len(trends_df) > 0:
-                        fig = go.Figure()
-                        colors = ['#3399FF', '#002163', '#3399FF', '#009A44', '#FAD201']
-                        for idx, row in trends_df.iterrows():
-                            fig.add_trace(go.Bar(
-                                x=[row['Метрика']],
-                                y=[abs(row['Наклон'])],
-                                name=row['Направление'],
-                                marker_color=colors[idx % len(colors)],
-                                text=[f"{row['Направление']}<br>Наклон: {row['Наклон']:.2f}"],
-                                textposition='auto'
-                            ))
-                        fig.update_layout(
-                            title="Сила трендов по метрикам",
-                            yaxis_title="Абсолютное значение наклона",
-                            showlegend=False,
-                            height=400,
-                            plot_bgcolor='white',
-                            paper_bgcolor='white',
-                            font=dict(color='#212121')
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-
                 if 'recommendations' in results and results['recommendations']:
                     st.markdown('<div class="content-container"><h3 style="color: #002163;">💡 Рекомендации</h3></div>',
                                 unsafe_allow_html=True)
                     for rec in results['recommendations']:
                         with st.container():
                             st.markdown(f"**{rec.get('type', 'Рекомендация')}:** {rec.get('text', '')}")
-                            if 'priority' in rec:
-                                priority = rec['priority']
-                                if priority == 'high':
-                                    st.markdown('<div class="ai-warning">Высокий приоритет</div>',
-                                                unsafe_allow_html=True)
-                                elif priority == 'medium':
-                                    st.markdown('<div class="ai-insight">Средний приоритет</div>',
-                                                unsafe_allow_html=True)
 
                 st.markdown(
                     '<div class="content-container"><h3 style="color: #002163;">📊 Визуализация данных</h3></div>',
@@ -632,26 +598,37 @@ def show_basic_analysis(df):
                     date_col = date_cols[0]
                     value_col = numeric_cols[0] if len(numeric_cols) > 0 else None
                     if value_col:
-                        fig = px.line(df, x=date_col, y=value_col,
-                                      title=f"Тренд {value_col} по времени")
-                        fig.update_layout(
-                            plot_bgcolor='white',
-                            paper_bgcolor='white',
-                            font=dict(color='#212121')
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
+                        try:
+                            import plotly.graph_objects as go
+                            import plotly.express as px
+
+                            fig = px.line(df, x=date_col, y=value_col,
+                                          title=f"Тренд {value_col} по времени")
+                            fig.update_layout(
+                                plot_bgcolor='white',
+                                paper_bgcolor='white',
+                                font=dict(color='#212121')
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except ImportError:
+                            st.warning("Plotly не установлен. Установите: pip install plotly")
 
                 if len(numeric_cols) > 0:
                     selected_col = st.selectbox("Выберите колонку для распределения:", numeric_cols)
                     if selected_col:
-                        fig = px.histogram(df, x=selected_col,
-                                           title=f"Распределение {selected_col}")
-                        fig.update_layout(
-                            plot_bgcolor='white',
-                            paper_bgcolor='white',
-                            font=dict(color='#212121')
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
+                        try:
+                            import plotly.express as px
+
+                            fig = px.histogram(df, x=selected_col,
+                                               title=f"Распределение {selected_col}")
+                            fig.update_layout(
+                                plot_bgcolor='white',
+                                paper_bgcolor='white',
+                                font=dict(color='#212121')
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except ImportError:
+                            st.warning("Plotly не установлен. Установите: pip install plotly")
             else:
                 st.error("❌ Не удалось выполнить анализ")
         except Exception as e:
@@ -747,7 +724,6 @@ def display_ai_analysis(analysis_text):
                         css_class = "ai-analysis-section"
                     else:
                         css_class = "ai-insight"
-                    # ИСПРАВЛЕНО: Убраны звездочки и обратные кавычки из текста предупреждения.
                     if "ВНИМАНИЕ" in title_upper or "ПРЕДУПРЕЖДЕНИЕ" in title_upper:
                         content_cleaned = content.replace("*", "").replace("`", "")
                         st.markdown(f"""
@@ -908,29 +884,6 @@ def display_amocrm_data(amocrm_data):
         if data_type == "leads" and 'price' in df.columns and len(df) > 1:
             st.markdown('<div class="content-container"><h3 style="color: #002163;">📊 Анализ сделок</h3></div>',
                         unsafe_allow_html=True)
-            col1, col2 = st.columns(2)
-            with col1:
-                fig = px.histogram(df, x='price',
-                                   title="Распределение сделок по сумме",
-                                   labels={'price': 'Сумма сделки'})
-                fig.update_layout(
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    font=dict(color='#212121')
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            with col2:
-                if len(df) > 5:
-                    top_leads = df.nlargest(5, 'price')
-                    fig = px.bar(top_leads, x='name', y='price',
-                                 title="Топ-5 сделок по сумме",
-                                 labels={'name': 'Сделка', 'price': 'Сумма'})
-                    fig.update_layout(
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        font=dict(color='#212121')
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
     elif isinstance(data, dict):
         st.json(data)
     else:
@@ -1013,6 +966,17 @@ def show_visualizations_tab():
 
     if st.button("🚀 Создать визуализацию", type="primary"):
         try:
+            # Пробуем импортировать plotly
+            try:
+                import plotly.graph_objects as go
+                import plotly.express as px
+                plotly_available = True
+            except ImportError:
+                plotly_available = False
+                st.warning("⚠️ Plotly не установлен. Установите: pip install plotly")
+                st.info("Используйте вкладку 'Анализ данных' для визуализации с альтернативными библиотеками")
+                return
+
             if viz_type == "📈 Линейный график":
                 if color_col:
                     fig = px.line(df_sorted, x=x_col, y=y_col, color=color_col,
@@ -1313,9 +1277,6 @@ def main():
         show_visualizations_tab()
     elif current_tab == "Отчеты":
         show_reports_tab()
-
-    # ====== УБРАНО: Старый заголовок и старый нижний блок ======
-    # Полностью удалены оба старых блока, оставлен только один новый вверху.
 
     # Футер
     st.divider()

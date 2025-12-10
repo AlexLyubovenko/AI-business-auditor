@@ -2225,4 +2225,4 @@ if __name__ == "__main__":
         bot.run()
 
     except Exception as e:
-        print(f"\n❌ Ошибка при ини
+        print(f"\n❌ Ошибка при инициализации бота: {e}")

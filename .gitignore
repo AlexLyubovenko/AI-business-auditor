@@ -1,8 +1,11 @@
 .env
-__pycache__/
+.env.local
 *.pyc
-logs/
-temp/
+__pycache__/
 *.log
 .DS_Store
-Thumbs.db
+*.pdf
+*.xlsx
+*.json
+uploads/
+temp/

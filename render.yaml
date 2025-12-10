@@ -1,0 +1,23 @@
+# render.yaml
+services:
+  # Веб-приложение (Streamlit)
+  - type: web
+    name: ai-business-auditor-web
+    env: python
+    buildCommand: ""
+    startCommand: streamlit run ui/streamlit_app.py --server.port=$PORT --server.address=0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /healthz
+
+  # Telegram бот (фоновый процесс)
+  - type: worker
+    name: ai-business-auditor-bot
+    env: python
+    buildCommand: ""
+    startCommand: python integrations/telegram/gpt_bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+healthCheckPath: /healthz

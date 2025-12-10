@@ -140,17 +140,26 @@ def run_streamlit():
 
 
 def run_telegram_bot():
-    """Запуск Telegram бота - ОСНОВНОЕ ИСПРАВЛЕНИЕ"""
+    """Запуск Telegram бота"""
     logger.info("🤖 Запуск Telegram бота...")
 
-    # Проверяем, есть ли токен бота
     if not os.getenv('TELEGRAM_BOT_TOKEN'):
         logger.warning("⚠️ TELEGRAM_BOT_TOKEN не установлен, бот не будет запущен")
         return None
 
-    # ВАЖНО: запускаем бот в ОТДЕЛЬНОМ процессе Python
-    # чтобы избежать проблем с event loop и импортами
-    cmd = [sys.executable, "-c", """
+    cmd = [sys.executable, "integrations/telegram/gpt_bot.py"]
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        cwd="/app"  # Важно: рабочая директория должна быть корнем
+    )
+
+    # ... остальной код функции
 import sys
 import os
 import asyncio

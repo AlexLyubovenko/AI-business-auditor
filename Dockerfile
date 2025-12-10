@@ -21,9 +21,11 @@ COPY . .
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Открываем порты
-EXPOSE 8501  # Streamlit
-EXPOSE 8080  # Health check
+# Открываем порты (ВАЖНО: комментарии отдельно!)
+# Порт для Streamlit
+EXPOSE 8501
+# Порт для Health check
+EXPOSE 8080
 
 # Запускаем все сервисы через runner.py
 CMD ["python", "runner.py"]

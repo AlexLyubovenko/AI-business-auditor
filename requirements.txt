@@ -1,33 +1,25 @@
-# Основные зависимости
-streamlit>=1.28.0
-pandas>=2.0.0
-openai>=1.0.0
-python-dotenv>=1.0.0
+# requirements_final.txt
+# Основные (обязательные)
+streamlit==1.32.0
+pandas==2.2.1
+openai==1.14.2
+python-dotenv==1.0.0
 
-# Telegram бот (ВНИМАНИЕ: нужна версия 20.x!)
-python-telegram-bot>=20.0,<21.0
+# Telegram
+python-telegram-bot==20.7
 
 # Анализ данных
-numpy>=1.24.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-plotly>=5.17.0
+numpy==1.26.4
+matplotlib==3.8.3
 
-# Генерация отчетов
-reportlab>=4.0.0
-openpyxl>=3.1.0
-fpdf>=1.7.0
-PyPDF2>=3.0.0
+# Для работы с файлами
+openpyxl==3.1.2
 
-# HTTP запросы
-requests>=2.31.0
-aiohttp>=3.9.0
+# HTTP
+requests==2.31.0
 
-# Утилиты
-pandasai>=1.0.0
-python-multipart>=0.0.6
+# Мультипарт загрузка
+python-multipart==0.0.9
 
-python-telegram-bot>=20.0
-pandas>=2.0.0
-openai>=1.0.0
-python-dotenv>=1.0.0
+# Опционально (если нужен продвинутый анализ)
+# pandasai==2.2.15

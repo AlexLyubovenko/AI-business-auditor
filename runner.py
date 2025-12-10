@@ -1,4 +1,3 @@
-# runner.py
 """
 Запускает все сервисы AI Business Auditor в одном контейнере:
 1. Streamlit веб-интерфейс (порт 8501)
@@ -43,8 +42,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):
-        logger.info(f"HTTP {format % args}")
+    def log_message(self, format_str, *args):
+        logger.info(f"HTTP {format_str % args}")
 
 
 def run_health_server():
@@ -55,8 +54,8 @@ def run_health_server():
     def run_server():
         try:
             server.serve_forever()
-        except Exception as e:
-            logger.error(f"Health server error: {e}")
+        except Exception as e_error:
+            logger.error(f"Health server error: {e_error}")
 
     health_thread = threading.Thread(target=run_server, daemon=True)
     health_thread.start()
@@ -77,8 +76,8 @@ def run_health_server():
         else:
             logger.error("❌ Health-check сервер не запустился")
             return None
-    except Exception as e:
-        logger.error(f"❌ Ошибка проверки health сервера: {e}")
+    except Exception as e_error:
+        logger.error(f"❌ Ошибка проверки health сервера: {e_error}")
         return None
 
 
@@ -134,8 +133,8 @@ def run_streamlit():
             logger.error("❌ Streamlit завершился при запуске")
             return None
 
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска Streamlit: {e}")
+    except Exception as e_error:
+        logger.error(f"❌ Ошибка запуска Streamlit: {e_error}")
         return None
 
 
@@ -149,65 +148,6 @@ def run_telegram_bot():
 
     cmd = [sys.executable, "integrations/telegram/gpt_bot.py"]
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
-        cwd="/app"  # Важно: рабочая директория должна быть корнем
-    )
-
-    # ... остальной код функции
-import sys
-import os
-import asyncio
-import logging
-
-# Добавляем корневую директорию в путь
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-async def main():
-    try:
-        # Теперь импорты должны работать
-        from integrations.telegram.gpt_bot import main as bot_main
-        await bot_main()
-    except ImportError as e:
-        logger.error(f"❌ Ошибка импорта: {e}")
-        logger.error(f"Python path: {sys.path}")
-        logger.error(f"Current dir: {os.getcwd()}")
-        logger.error(f"Files in integrations/: {os.listdir('integrations') if os.path.exists('integrations') else 'No integrations dir'}")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Ошибка бота: {e}")
-        raise
-
-if __name__ == "__main__":
-    # Создаем event loop для этого потока
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        logger.info("🛑 Бот остановлен")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-    finally:
-        loop.close()
-"""]
-
     try:
         process = subprocess.Popen(
             cmd,
@@ -216,7 +156,7 @@ if __name__ == "__main__":
             text=True,
             bufsize=1,
             universal_newlines=True,
-            cwd="/app"  # Указываем рабочую директорию
+            cwd=os.path.dirname(os.path.abspath(__file__))  # Исправлено: используем текущую директорию
         )
 
         def log_stream(stream, stream_type):
@@ -235,18 +175,17 @@ if __name__ == "__main__":
             return process
         else:
             logger.error("❌ Telegram бот завершился при запуске")
-            # Попробуем получить ошибку из stderr
             return None
 
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска Telegram бота: {e}")
+    except Exception as e_error:
+        logger.error(f"❌ Ошибка запуска Telegram бота: {e_error}")
         return None
 
 
-def check_services(processes):
+def check_services(processes_dict):
     """Проверка состояния всех сервисов"""
     all_ok = True
-    for name, process in processes.items():
+    for name, process in processes_dict.items():
         if process is None:
             continue
         if hasattr(process, 'poll'):
@@ -280,17 +219,18 @@ def main():
     # Обработчик сигналов для graceful shutdown
     def signal_handler(sig, frame):
         logger.info("\n🛑 Получен сигнал завершения...")
-        for name, process in processes.items():
-            if process:
+        for name, process_item in processes.items():
+            if process_item:
                 logger.info(f"Остановка {name}...")
-                if hasattr(process, 'terminate'):
-                    process.terminate()
+                if hasattr(process_item, 'terminate'):
+                    process_item.terminate()
                     try:
-                        process.wait(timeout=5)
-                    except:
-                        pass
-                elif hasattr(process, 'shutdown'):
-                    process.shutdown()
+                        process_item.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        if hasattr(process_item, 'kill'):
+                            process_item.kill()
+                elif hasattr(process_item, 'shutdown'):
+                    process_item.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -344,8 +284,7 @@ def main():
 
         print("\n🔧 Отладка:")
         print(f"  • OpenAI ключ: {'✅ установлен' if os.getenv('OPENAI_API_KEY') else '❌ отсутствует'}")
-        print(
-            f"  • Telegram токен: {'✅ установлен' if os.getenv('TELEGRAM_BOT_TOKEN') else '⚠️ не установлен (бот не запущен)'}")
+        print(f"  • Telegram токен: {'✅ установлен' if os.getenv('TELEGRAM_BOT_TOKEN') else '⚠️ не установлен (бот не запущен)'}")
         print(f"  • AmoCRM токен: {'✅ установлен' if os.getenv('AMOCRM_ACCESS_TOKEN') else '⚠️ не установлен'}")
 
         print("\n" + "=" * 60)
@@ -367,22 +306,22 @@ def main():
 
     except KeyboardInterrupt:
         logger.info("\n🛑 Остановка по запросу пользователя...")
-    except Exception as e:
-        logger.error(f"❌ Непредвиденная ошибка: {e}")
+    except Exception as e_error:
+        logger.error(f"❌ Непредвиденная ошибка: {e_error}")
     finally:
         # Остановка всех процессов
         logger.info("🛑 Завершение работы всех сервисов...")
-        for name, process in processes.items():
-            if process:
+        for name, process_item in processes.items():
+            if process_item:
                 logger.info(f"Останавливаю {name}...")
                 try:
-                    if hasattr(process, 'terminate'):
-                        process.terminate()
-                        process.wait(timeout=5)
-                    elif hasattr(process, 'shutdown'):
-                        process.shutdown()
-                except Exception as e:
-                    logger.error(f"Ошибка при остановке {name}: {e}")
+                    if hasattr(process_item, 'terminate'):
+                        process_item.terminate()
+                        process_item.wait(timeout=5)
+                    elif hasattr(process_item, 'shutdown'):
+                        process_item.shutdown()
+                except Exception as e_error:
+                    logger.error(f"Ошибка при остановке {name}: {e_error}")
 
         logger.info("✅ Все сервисы остановлены")
         print("\n👋 До свидания!\n")

@@ -44,9 +44,15 @@ async def main():
             logger.info("💡 Добавьте TELEGRAM_BOT_TOKEN в настройках Render")
             return
 
-        # Импортируем telegram модули
+        # Импортируем telegram модули ВНУТРИ функции
         from telegram import Update
-        from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+        from telegram.ext import (
+            Application,
+            CommandHandler,
+            MessageHandler,
+            filters,
+            ContextTypes
+        )
 
         # Создаем приложение
         application = Application.builder().token(token).build()
@@ -76,6 +82,11 @@ async def main():
         while True:
             await asyncio.sleep(3600)
 
+    except ImportError as e:
+        logger.error(f"❌ Ошибка импорта: {e}")
+        logger.error("Убедитесь, что установлен python-telegram-bot==20.7")
+        logger.error("Выполните: pip install python-telegram-bot==20.7")
+        raise
     except Exception as e:
         logger.error(f"❌ Критическая ошибка бота: {e}")
         raise
@@ -291,8 +302,8 @@ https://ai-business-auditor.onrender.com
 
             logger.info(f"✅ [{user_id}] Анализ успешен: {len(df)} записей")
 
-        except Exception as e:
-            error_msg = str(e)
+        except Exception as error:
+            error_msg = str(error)
             logger.error(f"❌ [{user_id}] Ошибка анализа: {error_msg}")
 
             # Формируем понятное сообщение об ошибке
@@ -396,7 +407,7 @@ https://ai-business-auditor.onrender.com
                     text="❌ Произошла ошибка при обработке запроса. Попробуйте позже.",
                     parse_mode=None
                 )
-            except:
+            except Exception:
                 pass
 
     application.add_error_handler(error_handler)
@@ -411,7 +422,7 @@ async def load_dataframe(file_path, file_ext):
             except UnicodeDecodeError:
                 try:
                     return pd.read_csv(file_path, encoding='cp1251')
-                except:
+                except Exception:
                     return pd.read_csv(file_path, encoding='latin1')
         elif file_ext in ['xlsx', 'xls']:
             return pd.read_excel(file_path)
@@ -430,6 +441,7 @@ async def analyze_dataframe(df, filename):
         # Проверяем доступность анализатора
         try:
             # Пробуем импортировать из agents
+            sys.path.insert(0, str(root_dir))
             from agents.analyzer import DataAnalyzer
 
             logger.info("✅ DataAnalyzer найден, запускаю анализ...")
@@ -546,9 +558,9 @@ async def analyze_dataframe(df, filename):
 
         return response
 
-    except Exception as e:
-        logger.error(f"Ошибка анализа DataFrame: {e}")
-        return f"⚠️ Ошибка анализа данных: {str(e)[:200]}"
+    except Exception as error:
+        logger.error(f"Ошибка анализа DataFrame: {error}")
+        return f"⚠️ Ошибка анализа данных: {str(error)[:200]}"
 
 if __name__ == "__main__":
     # Проверяем наличие обязательных переменных

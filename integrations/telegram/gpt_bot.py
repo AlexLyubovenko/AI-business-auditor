@@ -20,6 +20,96 @@ from contextlib import contextmanager
 from functools import lru_cache
 from typing import Dict, Any, Optional, List, Tuple
 
+import os
+import sys
+import logging
+import asyncio
+from datetime import datetime
+
+# Настройка логирования для работы в контейнере
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+# Проверяем, запущен ли в контейнере
+def is_in_container():
+    return os.getenv('RENDER') == 'true' or os.path.exists('/.dockerenv')
+
+
+async def main():
+    """Основная асинхронная функция бота"""
+    try:
+        # Инициализация бота
+        from integrations.telegram.config import TELEGRAM_BOT_TOKEN, BOT_CONFIG
+        from telegram.ext import Application
+
+        if not TELEGRAM_BOT_TOKEN:
+            logger.error("❌ TELEGRAM_BOT_TOKEN не установлен")
+            return
+
+        logger.info(f"🤖 Инициализация Telegram бота...")
+        logger.info(f"⏰ Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Создаем приложение
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        # Импортируем и регистрируем обработчики
+        from integrations.telegram.handlers import setup_handlers
+        setup_handlers(application)
+
+        logger.info("✅ Обработчики зарегистрированы")
+
+        # Настройка polling
+        await application.initialize()
+        await application.start()
+
+        if is_in_container():
+            logger.info("🚀 Запуск в режиме polling (контейнер)...")
+            await application.updater.start_polling(
+                drop_pending_updates=BOT_CONFIG.get("skip_updates", True),
+                timeout=BOT_CONFIG.get("timeout", 30)
+            )
+        else:
+            logger.info("🚀 Запуск в режиме polling (локально)...")
+            await application.updater.start_polling()
+
+        logger.info("✅ Бот запущен и готов к работе!")
+        logger.info(f"👤 Имя бота: @{(await application.bot.get_me()).username}")
+
+        # Бесконечный цикл для работы в контейнере
+        while True:
+            await asyncio.sleep(3600)  # Спим 1 час
+
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка бота: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    # Проверяем наличие обязательных переменных
+    required_vars = ['TELEGRAM_BOT_TOKEN']
+    missing = [var for var in required_vars if not os.getenv(var)]
+
+    if missing:
+        logger.warning(f"⚠️ Отсутствуют переменные: {missing}")
+        logger.info("💡 Telegram бот не будет запущен без TELEGRAM_BOT_TOKEN")
+        sys.exit(0)  # Не падаем, просто не запускаем бота
+
+    # Запускаем асинхронно
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Бот остановлен по запросу пользователя")
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска бота: {e}")
+
+
 # ========== НАСТРОЙКА ПУТЕЙ И КОНФИГУРАЦИИ ==========
 # Добавляем корневую директорию в путь
 current_dir = Path(__file__).parent.absolute()

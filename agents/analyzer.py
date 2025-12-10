@@ -1,424 +1,489 @@
+import os
 import pandas as pd
 import numpy as np
-from scipy import stats
+from datetime import datetime
 import json
-import os
-from datetime import datetime, timedelta
-import requests
+import re
+from typing import Dict, List, Any, Optional, Tuple
+import warnings
+
+# Опциональный импорт scipy
+try:
+    from scipy import stats
+
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("⚠️ SciPy не установлен. Некоторые статистические функции будут использовать numpy.")
 
 
 class DataAnalyzer:
-    """Анализатор данных с улучшенным AI анализом"""
+    """Анализатор данных для бизнес-аналитики с AI анализом через OpenAI GPT"""
 
     def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
+        self.warnings = []
 
-    def analyze(self, df):
+    def analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Основной анализ данных"""
         try:
             results = {
                 'metrics': self._calculate_metrics(df),
                 'trends': self._detect_trends(df),
-                'summary': self.get_data_summary(df),
-                'recommendations': self._generate_recommendations(df)
+                'patterns': self._find_patterns(df),
+                'anomalies': self._detect_anomalies(df),
+                'recommendations': self._generate_recommendations(df),
+                'summary': self._create_summary(df)
             }
             return results
         except Exception as e:
-            print(f"Ошибка анализа: {e}")
-            return None
+            return {'error': str(e)}
 
-    def _calculate_metrics(self, df):
-        """Расчет основных метрик"""
+    def _calculate_metrics(self, df: pd.DataFrame) -> Dict[str, float]:
+        """Расчет ключевых метрик"""
         metrics = {}
 
-        # Ищем числовые колонки
+        # Базовые метрики
+        metrics['total_records'] = len(df)
+        metrics['total_columns'] = len(df.columns)
+
+        # Числовые метрики
         numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            metrics['numeric_columns'] = len(numeric_cols)
 
-        if len(numeric_cols) == 0:
-            return {"error": "Нет числовых данных для анализа"}
+            for col in numeric_cols[:5]:  # Ограничиваем первыми 5 колонками
+                metrics[f'{col}_mean'] = float(df[col].mean())
+                metrics[f'{col}_median'] = float(df[col].median())
+                metrics[f'{col}_std'] = float(df[col].std())
+                metrics[f'{col}_sum'] = float(df[col].sum())
+                metrics[f'{col}_min'] = float(df[col].min())
+                metrics[f'{col}_max'] = float(df[col].max())
 
-        # Базовые статистики
-        for col in numeric_cols[:10]:  # Ограничиваем количество колонок
-            try:
-                col_data = df[col].dropna()
-                if len(col_data) > 0:
-                    metrics[f'{col}_mean'] = float(col_data.mean())
-                    metrics[f'{col}_median'] = float(col_data.median())
-                    metrics[f'{col}_std'] = float(col_data.std())
-                    metrics[f'{col}_min'] = float(col_data.min())
-                    metrics[f'{col}_max'] = float(col_data.max())
-            except:
-                pass
-
-        # Финансовые метрики (если есть соответствующие колонки)
-        col_names_lower = [str(col).lower() for col in df.columns]
-
-        # Выручка
-        revenue_cols = [col for col in numeric_cols if any(word in str(col).lower()
-                                                           for word in ['выруч', 'reven', 'доход', 'income', 'sale'])]
-        if revenue_cols:
-            revenue = df[revenue_cols[0]].sum()
-            metrics['Total_Revenue'] = float(revenue)
-            metrics['Avg_Revenue'] = float(revenue / len(df)) if len(df) > 0 else 0
-
-        # Прибыль
-        profit_cols = [col for col in numeric_cols if any(word in str(col).lower()
-                                                          for word in ['прибыл', 'profit', 'марж', 'margin'])]
-        if profit_cols:
-            profit = df[profit_cols[0]].sum()
-            metrics['Total_Profit'] = float(profit)
-            metrics['Avg_Profit'] = float(profit / len(df)) if len(df) > 0 else 0
-
-        # Расходы
-        cost_cols = [col for col in numeric_cols if any(word in str(col).lower()
-                                                        for word in ['расход', 'затрат', 'cost', 'expense'])]
-        if cost_cols:
-            cost = df[cost_cols[0]].sum()
-            metrics['Total_Cost'] = float(cost)
-
-        # Расчет маржи (если есть выручка и расходы)
-        if 'Total_Revenue' in metrics and 'Total_Cost' in metrics:
-            revenue = metrics['Total_Revenue']
-            cost = metrics['Total_Cost']
-            if revenue > 0:
-                profit = revenue - cost
-                metrics['Gross_Profit'] = float(profit)
-                metrics['Gross_Margin_Percent'] = float((profit / revenue) * 100)
-
-        # Рост (если есть временные данные)
-        date_cols = df.select_dtypes(include=['datetime64']).columns
-        if len(date_cols) > 0 and len(revenue_cols) > 0:
-            date_col = date_cols[0]
-            revenue_col = revenue_cols[0]
-
-            try:
-                # Сортируем по дате
-                df_sorted = df.sort_values(date_col)
-                if len(df_sorted) >= 2:
-                    first_rev = df_sorted.iloc[0][revenue_col]
-                    last_rev = df_sorted.iloc[-1][revenue_col]
-
-                    if first_rev > 0:
-                        growth = ((last_rev - first_rev) / first_rev) * 100
-                        metrics['Revenue_Growth_Percent'] = float(growth)
-            except:
-                pass
+        # Процент пропущенных значений
+        missing_total = df.isnull().sum().sum()
+        metrics['missing_values'] = missing_total
+        metrics['missing_percentage'] = float(missing_total / (len(df) * len(df.columns)) * 100)
 
         return metrics
 
-    def _detect_trends(self, df):
-        """Обнаружение трендов в данных"""
+    def _detect_trends(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Обнаружение трендов"""
         trends = []
 
-        # Ищем временные данные
+        # Ищем колонки с датами
         date_cols = df.select_dtypes(include=['datetime64']).columns
-        if len(date_cols) == 0:
-            return trends
 
-        date_col = date_cols[0]
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(date_cols) > 0:
+            date_col = date_cols[0]
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
 
-        for num_col in numeric_cols[:5]:  # Анализируем первые 5 числовых колонок
-            try:
-                # Убираем пропуски и сортируем по дате
-                temp_df = df[[date_col, num_col]].dropna()
-                if len(temp_df) < 3:
-                    continue
+            for col in numeric_cols:
+                if len(df) > 1:
+                    try:
+                        # Используем numpy если scipy недоступен
+                        if SCIPY_AVAILABLE:
+                            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                                range(len(df)), df[col].fillna(df[col].mean())
+                            )
+                        else:
+                            # Простая линейная регрессия через numpy
+                            x = np.arange(len(df))
+                            y = df[col].fillna(df[col].mean()).values
+                            A = np.vstack([x, np.ones(len(x))]).T
+                            slope, intercept = np.linalg.lstsq(A, y, rcond=None)[0]
+                            r_value = np.corrcoef(x, y)[0, 1]
+                            p_value = None
+                            std_err = np.std(y - (slope * x + intercept))
 
-                temp_df = temp_df.sort_values(date_col)
+                        direction = "рост" if slope > 0 else "снижение"
+                        strength = "сильный" if abs(r_value) > 0.7 else "умеренный" if abs(r_value) > 0.3 else "слабый"
 
-                # Преобразуем даты в числовой формат для регрессии
-                temp_df['date_numeric'] = (temp_df[date_col] - temp_df[date_col].min()).dt.days
-
-                # Линейная регрессия
-                x = temp_df['date_numeric'].values
-                y = temp_df[num_col].values
-
-                slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
-
-                # Определяем силу и направление тренда
-                if abs(slope) < 0.1:
-                    strength = "слабый"
-                elif abs(slope) < 0.5:
-                    strength = "умеренный"
-                else:
-                    strength = "сильный"
-
-                direction = "рост" if slope > 0 else "снижение"
-
-                trends.append({
-                    'Метрика': num_col,
-                    'Направление': direction,
-                    'Сила': strength,
-                    'Наклон': float(slope),
-                    'R^2': float(r_value ** 2),
-                    'Значимость': p_value < 0.05
-                })
-
-            except Exception as e:
-                continue
+                        trends.append({
+                            'Метрика': col,
+                            'Направление': direction,
+                            'Сила': strength,
+                            'Наклон': float(slope),
+                            'R-квадрат': float(r_value ** 2),
+                            'Значимость': "значим" if (p_value is None or p_value < 0.05) else "незначим"
+                        })
+                    except Exception as e:
+                        print(f"Ошибка анализа тренда для {col}: {e}")
+                        continue
 
         return trends
 
-    def get_data_summary(self, df):
-        """Получение сводки по данным"""
-        summary = {
-            'rows': len(df),
-            'columns': len(df.columns),
-            'missing_values': int(df.isnull().sum().sum()),
-            'numeric_columns': len(df.select_dtypes(include=[np.number]).columns),
-            'date_columns': len(df.select_dtypes(include=['datetime64']).columns),
-            'text_columns': len(df.select_dtypes(include=['object']).columns),
-            'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024 / 1024
-        }
+    def _find_patterns(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Поиск паттернов в данных"""
+        patterns = {}
 
-        # Информация о колонках
-        columns_info = []
-        for col in df.columns:
-            col_info = {
-                'name': col,
-                'type': str(df[col].dtype),
-                'unique': df[col].nunique(),
-                'missing': df[col].isnull().sum()
+        # Корреляции
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 1:
+            correlations = {}
+            for i in range(len(numeric_cols)):
+                for j in range(i + 1, len(numeric_cols)):
+                    col1, col2 = numeric_cols[i], numeric_cols[j]
+                    try:
+                        if SCIPY_AVAILABLE:
+                            corr, p_value = stats.pearsonr(
+                                df[col1].fillna(df[col1].mean()),
+                                df[col2].fillna(df[col2].mean())
+                            )
+                        else:
+                            corr = np.corrcoef(
+                                df[col1].fillna(df[col1].mean()),
+                                df[col2].fillna(df[col2].mean())
+                            )[0, 1]
+                            p_value = None
+
+                        if abs(corr) > 0.7:
+                            correlations[f'{col1}_{col2}'] = {
+                                'correlation': float(corr),
+                                'strength': 'сильная',
+                                'significance': 'значимая' if (p_value is None or p_value < 0.05) else 'незначимая'
+                            }
+                    except:
+                        continue
+
+            patterns['correlations'] = correlations
+
+        # Сезонность
+        date_cols = df.select_dtypes(include=['datetime64']).columns
+        if len(date_cols) > 0:
+            date_col = date_cols[0]
+            patterns['has_dates'] = True
+            patterns['date_range'] = {
+                'start': str(df[date_col].min()),
+                'end': str(df[date_col].max()),
+                'duration_days': (df[date_col].max() - df[date_col].min()).days
             }
 
-            if pd.api.types.is_numeric_dtype(df[col]):
-                col_info['min'] = float(df[col].min()) if not df[col].isnull().all() else None
-                col_info['max'] = float(df[col].max()) if not df[col].isnull().all() else None
-                col_info['mean'] = float(df[col].mean()) if not df[col].isnull().all() else None
+        return patterns
 
-            columns_info.append(col_info)
+    def _detect_anomalies(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Обнаружение аномалий"""
+        anomalies = {}
 
-        summary['columns_info'] = columns_info
-        return summary
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
 
-    def _generate_recommendations(self, df):
-        """Генерация базовых рекомендаций"""
+        for col in numeric_cols:
+            try:
+                values = df[col].dropna()
+                if len(values) > 10:
+                    mean = values.mean()
+                    std = values.std()
+
+                    # Простой метод 3-сигм
+                    lower_bound = mean - 3 * std
+                    upper_bound = mean + 3 * std
+
+                    outlier_count = ((values < lower_bound) | (values > upper_bound)).sum()
+                    if outlier_count > 0:
+                        anomalies[col] = {
+                            'outlier_count': int(outlier_count),
+                            'percentage': float(outlier_count / len(values) * 100),
+                            'mean': float(mean),
+                            'std': float(std),
+                            'lower_bound': float(lower_bound),
+                            'upper_bound': float(upper_bound)
+                        }
+            except:
+                continue
+
+        return anomalies
+
+    def _generate_recommendations(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Генерация рекомендаций на основе анализа"""
         recommendations = []
 
         # Проверка на пропущенные значения
-        missing = df.isnull().sum().sum()
-        if missing > 0:
+        missing_percentage = (df.isnull().sum() / len(df) * 100)
+        high_missing = missing_percentage[missing_percentage > 20].index.tolist()
+
+        if high_missing:
             recommendations.append({
-                'type': 'Данные',
-                'text': f'Обнаружено {missing} пропущенных значений. Рекомендуется заполнить или удалить их.',
-                'priority': 'medium'
+                'type': 'data_quality',
+                'priority': 'high',
+                'text': f'Высокий процент пропущенных значений в колонках: {", ".join(high_missing[:3])}'
             })
 
-        # Проверка на выбросы в числовых колонках
+        # Рекомендации по данным
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        for col in numeric_cols[:3]:  # Проверяем первые 3 колонки
-            try:
-                q1 = df[col].quantile(0.25)
-                q3 = df[col].quantile(0.75)
-                iqr = q3 - q1
-                lower_bound = q1 - 1.5 * iqr
-                upper_bound = q3 + 1.5 * iqr
 
-                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-                if len(outliers) > 0:
+        if len(numeric_cols) > 0:
+            for col in numeric_cols[:3]:
+                if df[col].std() / df[col].mean() > 0.5:
                     recommendations.append({
-                        'type': 'Анализ',
-                        'text': f'В колонке "{col}" обнаружено {len(outliers)} выбросов.',
-                        'priority': 'low'
+                        'type': 'data_variability',
+                        'priority': 'medium',
+                        'text': f'Высокая волатильность в {col}. Рассмотрите нормализацию.'
                     })
-            except:
-                pass
 
-        # Проверка на однородность данных
-        for col in df.columns:
-            if df[col].nunique() == 1:
-                recommendations.append({
-                    'type': 'Данные',
-                    'text': f'Колонка "{col}" содержит только одно значение. Возможно, её можно удалить.',
-                    'priority': 'low'
-                })
+        # Общие рекомендации
+        if len(df) > 1000:
+            recommendations.append({
+                'type': 'performance',
+                'priority': 'low',
+                'text': 'Большой объем данных. Рассмотрите использование индексов для ускорения запросов.'
+            })
 
         return recommendations
 
-    def gpt_analysis(self, data_summary, trends, financial_metrics):
-        """Улучшенный GPT анализ с подробными ответами"""
+    def _create_summary(self, df: pd.DataFrame) -> str:
+        """Создание краткого резюме"""
+        summary_parts = []
 
-        if not self.api_key or self.api_key == "your_openai_api_key_here":
-            return "⚠️ OpenAI API ключ не настроен. Добавьте ключ в .env файл."
+        summary_parts.append(f"Данные содержат {len(df)} записей и {len(df.columns)} колонок.")
 
-        # Формируем подробный промпт
-        prompt = self._create_detailed_prompt(data_summary, trends, financial_metrics)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            summary_parts.append(f"Найдено {len(numeric_cols)} числовых колонок.")
 
+        date_cols = df.select_dtypes(include=['datetime64']).columns
+        if len(date_cols) > 0:
+            summary_parts.append(f"Обнаружены временные ряды: {', '.join(date_cols[:3])}.")
+
+        missing_total = df.isnull().sum().sum()
+        if missing_total > 0:
+            summary_parts.append(
+                f"Пропущенные значения: {missing_total} ({missing_total / (len(df) * len(df.columns)) * 100:.1f}%).")
+
+        return " ".join(summary_parts)
+
+    def gpt_analysis(self, df: pd.DataFrame = None, data_summary=None, trends=None, financial_metrics=None) -> str:
+        """Реальный AI анализ данных через OpenAI GPT"""
         try:
-            # Используем ручной запрос к OpenAI API
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+            # Пробуем импортировать OpenAI
+            import openai
 
-            data = {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """Ты - старший бизнес-аналитик с 20-летним опытом. 
-                        Твоя задача - дать максимально подробный, полезный и практичный анализ бизнес-данных.
-                        Используй профессиональную терминологию, но объясняй понятно.
-                        Структурируй ответ с четкими разделами."""
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": 0.3,
-                "max_tokens": 2500,
-                "top_p": 0.9
-            }
+            # Проверяем наличие API ключа
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key or api_key == "your_openai_api_key_here":
+                return self._get_fallback_analysis(df, trends, financial_metrics)
 
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=60
-            )
+            # Создаем клиент OpenAI
+            client = openai.OpenAI(api_key=api_key)
 
-            if response.status_code == 200:
-                result = response.json()
-                analysis = result["choices"][0]["message"]["content"]
-                return self._format_ai_response(analysis)
-            else:
-                return f"❌ Ошибка API: {response.status_code}\n{response.text}"
+            # Создаем промпт для GPT
+            prompt = self._create_gpt_prompt(df, data_summary, trends, financial_metrics)
 
-        except Exception as e:
-            return f"❌ Ошибка подключения к OpenAI: {e}"
+            try:
+                # Отправляем запрос к GPT
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """Ты опытный бизнес-аналитик и консультант. 
+                            Твоя задача - анализировать бизнес-данные и давать практические, конкретные рекомендации.
+                            Отвечай на русском языке. Используй маркдаун форматирование.
+                            Будь объективным, но конструктивным. Выделяй как сильные стороны, так и области для улучшения."""
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1500,
+                    temperature=0.7,
+                    top_p=0.9
+                )
 
-    def _create_detailed_prompt(self, data_summary, trends, financial_metrics):
-        """Создание подробного промпта для GPT"""
+                # Возвращаем ответ от GPT
+                return response.choices[0].message.content
 
-        # Форматируем данные для промпта
-        trends_text = ""
-        if trends:
-            trends_text = "## ОБНАРУЖЕННЫЕ ТРЕНДЫ:\n"
-            for trend in trends:
-                trends_text += f"- {trend['Метрика']}: {trend['Направление']} ({trend['Сила']}), наклон: {trend['Наклон']:.4f}\n"
+            except openai.RateLimitError:
+                return "⚠️ Превышен лимит запросов к OpenAI API. Попробуйте позже."
+            except openai.APITimeoutError:
+                return "⚠️ Таймаут при обращении к OpenAI API. Проверьте подключение к интернету."
+            except Exception as e:
+                error_msg = str(e)
+                if "insufficient_quota" in error_msg:
+                    return "⚠️ Закончился баланс на OpenAI API. Пополните счет."
+                return f"⚠️ Ошибка OpenAI API: {error_msg[:200]}"
 
-        metrics_text = ""
+        except ImportError:
+            return self._get_fallback_analysis(df, trends, financial_metrics)
+
+    def _create_gpt_prompt(self, df: pd.DataFrame, data_summary, trends, financial_metrics) -> str:
+        """Создание промпта для GPT анализа"""
+
+        prompt_parts = ["# 🔍 АНАЛИЗ БИЗНЕС-ДАННЫХ\n\n"]
+
+        # Информация о данных
+        if df is not None:
+            prompt_parts.append("## 📊 СТРУКТУРА ДАННЫХ:")
+            prompt_parts.append(f"- **Объем данных:** {len(df)} записей, {len(df.columns)} колонок")
+
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                prompt_parts.append(f"- **Числовые колонки ({len(numeric_cols)}):** {', '.join(numeric_cols[:5])}")
+                if len(numeric_cols) > 5:
+                    prompt_parts.append(f"  ... и еще {len(numeric_cols) - 5} колонок")
+
+            categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+            if len(categorical_cols) > 0:
+                prompt_parts.append(
+                    f"- **Текстовые колонки ({len(categorical_cols)}):** {', '.join(categorical_cols[:3])}")
+
+            date_cols = df.select_dtypes(include=['datetime64']).columns
+            if len(date_cols) > 0:
+                for col in date_cols[:2]:
+                    prompt_parts.append(
+                        f"- **Временной ряд {col}:** с {df[col].min().date()} по {df[col].max().date()}")
+
+        # Сводка если есть
+        if data_summary:
+            prompt_parts.append("\n## 📈 ОСНОВНАЯ СВОДКА:")
+            if isinstance(data_summary, str):
+                prompt_parts.append(data_summary)
+            elif isinstance(data_summary, dict) and 'summary' in data_summary:
+                prompt_parts.append(data_summary['summary'])
+
+        # Тренды
+        if trends and len(trends) > 0:
+            prompt_parts.append("\n## 📈 ОБНАРУЖЕННЫЕ ТРЕНДЫ:")
+            for trend in trends[:5]:
+                metric = trend.get('Метрика', 'Метрика')
+                direction = trend.get('Направление', 'стабильный')
+                strength = trend.get('Сила', 'средний')
+                r_squared = trend.get('R-квадрат', 0)
+                prompt_parts.append(f"- **{metric}:** {direction} ({strength}, R²={r_squared:.3f})")
+
+        # Финансовые метрики
         if financial_metrics:
-            metrics_text = "## ФИНАНСОВЫЕ МЕТРИКИ:\n"
-            for key, value in list(financial_metrics.items())[:15]:  # Ограничиваем количество
+            prompt_parts.append("\n## 💰 КЛЮЧЕВЫЕ МЕТРИКИ:")
+            for key, value in list(financial_metrics.items())[:8]:
                 if isinstance(value, (int, float)):
                     if abs(value) >= 1000000:
-                        formatted = f"{value / 1000000:.2f} млн"
+                        display_value = f"{value / 1000000:.2f} млн"
                     elif abs(value) >= 1000:
-                        formatted = f"{value / 1000:.1f} тыс"
+                        display_value = f"{value / 1000:.1f} тыс"
                     else:
-                        formatted = f"{value:.2f}"
+                        display_value = f"{value:,.0f}"
 
-                    if 'Percent' in key or '%' in key:
-                        formatted = f"{value:.1f}%"
+                    key_display = key.replace('_', ' ').title()
+                    prompt_parts.append(f"- **{key_display}:** {display_value}")
 
-                    metrics_text += f"- {key}: {formatted}\n"
+        # Примеры данных
+        if df is not None and len(df) > 0:
+            prompt_parts.append("\n## 🎯 ЗАДАЧА ДЛЯ AI-АНАЛИТИКА:")
+        else:
+            prompt_parts.append("\n## 🎯 ЗАДАЧА ДЛЯ AI-АНАЛИТИКА (на основе предоставленной информации):")
 
-        summary_text = f"""
-        ## СВОДКА ДАННЫХ:
-        - Строк: {data_summary.get('rows', 'N/A')}
-        - Колонок: {data_summary.get('columns', 'N/A')}
-        - Числовых колонок: {data_summary.get('numeric_columns', 'N/A')}
-        - Колонок с датами: {data_summary.get('date_columns', 'N/A')}
-        - Пропущенных значений: {data_summary.get('missing_values', 'N/A')}
-        """
+        prompt_parts.append("""
+Проанализируй бизнес-данные и предоставь структурированный отчет:
 
-        prompt = f"""
-        # ЗАДАНИЕ: ДЕТАЛЬНЫЙ БИЗНЕС-АНАЛИЗ
+### 1. КЛЮЧЕВЫЕ ВЫВОДЫ (самое важное):
+- Основные сильные стороны бизнеса
+- Критические проблемы и риски (если есть)
+- Главные возможности для роста
 
-        ## ДАННЫЕ ДЛЯ АНАЛИЗА:
+### 2. ПРАКТИЧЕСКИЕ РЕКОМЕНДАЦИИ:
+- **Краткосрочные** (1-3 месяца): конкретные, быстрые действия
+- **Долгосрочные** (6-12 месяцев): стратегические улучшения
+- **Метрики для отслеживания:** какие KPI отслеживать
 
-        {summary_text}
+### 3. ПРИОРИТЕТНЫЕ ДЕЙСТВИЯ (топ-3):
+1. Что сделать в первую очередь
+2. Что сделать во вторую очередь
+3. Что сделать в третью очередь
 
-        {metrics_text}
+### 4. РИСКИ И ПРЕДУПРЕЖДЕНИЯ:
+- На что обратить особое внимание
+- Чего следует избегать
+- Потенциальные проблемы
 
-        {trends_text}
+### 5. ВЫВОДЫ:
+- Итоговое резюме анализа
+- Общая оценка состояния бизнеса
+- Прогноз при выполнении рекомендаций
 
-        ## ТРЕБОВАНИЯ К АНАЛИЗУ:
+**Формат:** Используй маркдаун с заголовками ## и ###, списки, жирный текст для акцентов.
+**Тон:** Профессиональный, конструктивный, полезный для владельца бизнеса.
+**Объем:** Подробный, но без воды. 800-1200 слов.
+""")
 
-        Сделай максимально подробный бизнес-анализ по следующей структуре:
+        return "\n".join(prompt_parts)
 
-        ### 1. 📊 ОБЩАЯ ОЦЕНКА БИЗНЕС-СИТУАЦИИ
-        - Общее состояние бизнеса (от 1 до 10 баллов)
-        - Ключевые сильные стороны
-        - Основные проблемы и вызовы
-        - Общая рекомендация для руководства
+    def _get_fallback_analysis(self, df, trends, financial_metrics) -> str:
+        """Запасной анализ если OpenAI недоступен"""
 
-        ### 2. 💰 ГЛУБОКИЙ ФИНАНСОВЫЙ АНАЛИЗ
-        - Анализ выручки: динамика, стабильность, сезонность
-        - Анализ прибыльности: маржинальность, рентабельность
-        - Анализ затрат: структура, эффективность, точки оптимизации
-        - Финансовая устойчивость и риски
+        analysis_parts = ["# 🤖 AI АНАЛИЗ БИЗНЕС-ДАННЫХ\n"]
+        analysis_parts.append("*⚠️ Режим локального анализа (OpenAI API не настроен)*\n")
 
-        ### 3. 📈 АНАЛИЗ ТРЕНДОВ И ПРОГНОЗ
-        - Детальный анализ каждого тренда (причины, последствия)
-        - Прогноз на 30/60/90 дней
-        - Ранние индикаторы проблем
-        - Точки роста и возможности
+        if df is not None:
+            analysis_parts.append(f"## 📊 АНАЛИЗИРУЕМЫЕ ДАННЫЕ")
+            analysis_parts.append(f"- **Объем:** {len(df)} записей, {len(df.columns)} колонок")
 
-        ### 4. ⚠️ РИСКИ И ВЫЗОВЫ (ДЕТАЛЬНО)
-        - Операционные риски
-        - Финансовые риски
-        - Рыночные риски
-        - Риски, связанные с данными
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                analysis_parts.append(f"- **Числовые данные:** {len(numeric_cols)} колонок")
+                top_numeric = numeric_cols[:3]
+                for col in top_numeric:
+                    mean_val = df[col].mean()
+                    std_val = df[col].std()
+                    analysis_parts.append(f"  • **{col}:** среднее = {mean_val:,.0f}, отклонение = {std_val:,.0f}")
 
-        ### 5. 🎯 КОНКРЕТНЫЕ РЕКОМЕНДАЦИИ ПО ПРИОРИТЕТАМ
+            # Анализ качества данных
+            missing_total = df.isnull().sum().sum()
+            if missing_total > 0:
+                missing_pct = missing_total / (len(df) * len(df.columns)) * 100
+                analysis_parts.append(f"- **Качество данных:** {missing_pct:.1f}% пропущенных значений")
 
-        #### СРОЧНЫЕ МЕРЫ (1-7 дней):
-        1. ...
-        2. ...
-        3. ...
+        if trends and len(trends) > 0:
+            analysis_parts.append("\n## 📈 ОСНОВНЫЕ ТРЕНДЫ")
+            for trend in trends[:3]:
+                metric = trend.get('Метрика', 'Метрика')
+                direction = trend.get('Направление', 'стабильный')
+                analysis_parts.append(f"- **{metric}:** {direction}")
 
-        #### СТРАТЕГИЧЕСКИЕ ШАГИ (1-3 месяца):
-        1. ...
-        2. ...
-        3. ...
+        analysis_parts.append("""
+## 💡 РЕКОМЕНДАЦИИ (локальный анализ)
 
-        #### ОПТИМИЗАЦИОННЫЕ ВОЗМОЖНОСТИ:
-        1. ...
-        2. ...
-        3. ...
+### 1. КЛЮЧЕВЫЕ ВЫВОДЫ:
+- Проведен базовый анализ структуры данных
+- Обнаружены основные метрики и тренды
+- Требуется настройка OpenAI API для глубокого AI анализа
 
-        ### 6. 📋 KPI ДЛЯ ОТСЛЕЖИВАНИЯ
-        - Ежедневные метрики
-        - Еженедельные отчеты
-        - Критические показатели
+### 2. ДЕЙСТВИЯ:
+1. **Настройте OpenAI API** для получения AI рекомендаций
+2. **Загрузите дополнительные данные** для более полного анализа
+3. **Используйте веб-интерфейс** для визуализации и отчетов
 
-        ### 7. 🔮 ПРОГНОЗ И СЦЕНАРИИ
-        - Оптимистичный сценарий
-        - Базовый сценарий
-        - Пессимистичный сценарий
+### 3. СЛЕДУЮЩИЕ ШАГИ:
+- Добавьте OPENAI_API_KEY в настройках
+- Перезапустите AI анализ
+- Получите персонализированные рекомендации от GPT
 
-        ### 8. 💡 ИНСАЙТЫ И НАБЛЮДЕНИЯ
-        - Неочевидные взаимосвязи
-        - Скрытые возможности
-        - Угрозы, которые могут быть упущены
+## 🔧 КАК НАСТРОИТЬ AI АНАЛИЗ:
+1. Получите API ключ на platform.openai.com
+2. Добавьте в .env файл: `OPENAI_API_KEY=ваш_ключ`
+3. Перезапустите приложение
+""")
 
-        Дай максимально подробный, конкретный и полезный для бизнеса анализ.
-        Используй числа, проценты и конкретные примеры.
-        """
+        return "\n".join(analysis_parts)
 
-        return prompt
+    def get_data_summary(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Получение сводки данных для AI анализа"""
+        if df is None or df.empty:
+            return {}
 
-    def _format_ai_response(self, analysis_text):
-        """Форматирование ответа AI для красивого отображения"""
+        return {
+            'shape': df.shape,
+            'dtypes': df.dtypes.astype(str).to_dict(),
+            'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist(),
+            'categorical_columns': df.select_dtypes(include=['object', 'category']).columns.tolist(),
+            'date_columns': df.select_dtypes(include=['datetime64']).columns.tolist(),
+            'missing_values': df.isnull().sum().to_dict(),
+            'basic_stats': df.describe().to_dict() if len(df.select_dtypes(include=[np.number]).columns) > 0 else {},
+            'summary': self._create_summary(df)
+        }
 
-        # Добавляем заголовки и улучшаем форматирование
-        formatted = f"""
-        # 🤖 AI БИЗНЕС-АНАЛИЗ
+    def basic_analysis(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Базовый анализ для Telegram бота"""
+        if df is None or df.empty:
+            return {"error": "Пустой DataFrame"}
 
-        *Анализ выполнен с помощью искусственного интеллекта на основе предоставленных данных*
-        *Время анализа: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
-
-        ---
-
-        {analysis_text}
-
-        ---
-
-        *⚠️ ВНИМАНИЕ: Данный анализ является рекомендательным. При принятии важных бизнес-решений рекомендуется консультация с экспертами.*
-        """
-
-        return formatted
+        try:
+            analysis = self.analyze(df)
+            return analysis
+        except Exception as e:
+            return {"error": str(e)}

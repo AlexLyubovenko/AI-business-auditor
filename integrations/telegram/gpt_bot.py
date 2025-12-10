@@ -14,14 +14,15 @@ from pathlib import Path
 
 # Импорт telegram модулей ДО main функции
 try:
-    from telegram import Update
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import (
         Application,
         CommandHandler,
         MessageHandler,
         filters,
         ContextTypes,
-        CallbackContext
+        CallbackContext,
+        CallbackQueryHandler
     )
     TELEGRAM_AVAILABLE = True
 except ImportError:
@@ -49,6 +50,9 @@ logger = logging.getLogger(__name__)
 # Глобальные настройки
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 ALLOWED_EXTENSIONS = ['csv', 'xlsx', 'xls', 'json']
+
+# Глобальная переменная для хранения последнего файла пользователя
+user_files = {}  # {user_id: {'file_path': path, 'df': df, 'file_name': name}}
 
 async def main():
     """Основная асинхронная функция бота"""
@@ -100,10 +104,85 @@ async def main():
 
 async def setup_handlers(application):
     """Настройка всех обработчиков"""
+
+    # Обработчик callback-запросов (для кнопок)
+    async def button_callback(update: Update, context: CallbackContext):
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        data = query.data
+
+        logger.info(f"🔘 [{user_id}] Нажата кнопка: {data}")
+
+        if data == 'analyze_gpt':
+            # Анализ с помощью GPT
+            if user_id in user_files and user_files[user_id]:
+                file_info = user_files[user_id]
+                await query.edit_message_text(
+                    text="🤖 *Запускаю GPT анализ...*\n\nПожалуйста, подождите...",
+                    parse_mode='Markdown'
+                )
+
+                # Получаем DataFrame
+                df = file_info['df']
+                file_name = file_info['file_name']
+
+                # Запускаем GPT анализ
+                await gpt_analysis_handler(query, df, file_name, user_id)
+            else:
+                await query.edit_message_text(
+                    text="❌ *Нет данных для анализа*\n\nПожалуйста, сначала загрузите файл.",
+                    parse_mode='Markdown'
+                )
+
+        elif data == 'show_charts':
+            # Показать графики
+            await query.edit_message_text(
+                text="📊 *Графики*\n\nДля просмотра графиков используйте веб-интерфейс:\n"
+                     f"{os.getenv('RENDER_EXTERNAL_URL', 'https://ai-business-auditor.onrender.com')}",
+                parse_mode='Markdown'
+            )
+
+        elif data == 'connect_amocrm':
+            # Подключить AmoCRM
+            await query.edit_message_text(
+                text="🔗 *Интеграция с AmoCRM*\n\n"
+                     "Для настройки интеграции с AmoCRM:\n"
+                     "1. Получите доступ в AmoCRM\n"
+                     "2. Настройте API ключ\n"
+                     "3. Используйте веб-интерфейс для подключения",
+                parse_mode='Markdown'
+            )
+
+        elif data == 'export_report':
+            # Экспорт отчета
+            await query.edit_message_text(
+                text="📄 *Экспорт отчета*\n\n"
+                     "Отчеты доступны в веб-интерфейсе:\n"
+                     f"{os.getenv('RENDER_EXTERNAL_URL', 'https://ai-business-auditor.onrender.com')}\n\n"
+                     "Там вы можете экспортировать в PDF, Excel или PNG.",
+                parse_mode='Markdown'
+            )
+
+        elif data == 'back_to_menu':
+            # Назад в меню
+            await show_main_menu(query)
+
     # Команда /start
     async def start_command(update: Update, context: CallbackContext):
         user = update.effective_user
         logger.info(f"👤 Пользователь {user.id} ({user.username}) запустил бота")
+
+        # Создаем клавиатуру с кнопками
+        keyboard = [
+            [InlineKeyboardButton("📊 Анализ файла", callback_data='analyze_file')],
+            [InlineKeyboardButton("🤖 GPT Анализ", callback_data='analyze_gpt')],
+            [InlineKeyboardButton("📈 Графики", callback_data='show_charts')],
+            [InlineKeyboardButton("🔗 AmoCRM", callback_data='connect_amocrm')],
+            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
         welcome_text = f"""
 🤖 *AI Business Auditor Bot*
@@ -118,16 +197,15 @@ async def setup_handlers(application):
 
 *Как начать:*
 1️⃣ Отправьте мне файл с данными
-2️⃣ Получите автоматический анализ
-3️⃣ Используйте GPT для детальных рекомендаций
+2️⃣ Используйте кнопки для анализа
+3️⃣ Получите AI рекомендации
 
 📁 *Форматы:* CSV, Excel, JSON
 ⚙️ *Макс. размер:* 10 MB
 
 *Веб-версия:* {os.getenv('RENDER_EXTERNAL_URL', 'https://ai-business-auditor.onrender.com')}
 
-*Команды:*
-/start - Запустить бота
+Используйте кнопки ниже или команды:
 /help - Справка
 /status - Статус системы
         """
@@ -135,7 +213,25 @@ async def setup_handlers(application):
         await update.message.reply_text(
             welcome_text,
             parse_mode='Markdown',
+            reply_markup=reply_markup,
             disable_web_page_preview=True
+        )
+
+    async def show_main_menu(query):
+        """Показать главное меню"""
+        keyboard = [
+            [InlineKeyboardButton("📊 Анализ файла", callback_data='analyze_file')],
+            [InlineKeyboardButton("🤖 GPT Анализ", callback_data='analyze_gpt')],
+            [InlineKeyboardButton("📈 Графики", callback_data='show_charts')],
+            [InlineKeyboardButton("🔗 AmoCRM", callback_data='connect_amocrm')],
+            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text="🎛️ *Главное меню*\n\nВыберите действие:",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
         )
 
     # Команда /help
@@ -151,7 +247,7 @@ async def setup_handlers(application):
 *📁 Как использовать:*
 1. Отправьте файл с данными (CSV/Excel/JSON)
 2. Получите автоматический анализ
-3. Используйте GPT для детальных рекомендаций
+3. Используйте кнопки для дополнительного анализа
 
 *✅ Требования к файлам:*
 • Поддерживаемые форматы: .csv, .xlsx, .xls, .json
@@ -201,7 +297,6 @@ https://ai-business-auditor.onrender.com
 *📈 Статистика:*
 • Запущен: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 • Режим: {'🚀 Продакшен' if os.getenv('RENDER') else '🛠️ Разработка'}
-• Память: Проверка...
 
 *🔗 Ссылки:*
 • Веб-интерфейс: {os.getenv('RENDER_EXTERNAL_URL', 'Не настроен')}
@@ -279,8 +374,25 @@ https://ai-business-auditor.onrender.com
             if df.empty or len(df) == 0:
                 raise ValueError("Файл пуст или не содержит данных")
 
+            # Сохраняем файл для пользователя
+            user_files[user_id] = {
+                'file_path': temp_file_path,
+                'df': df,
+                'file_name': file_name
+            }
+
             # Анализируем данные
             analysis_text = await analyze_dataframe(df, file_name)
+
+            # Создаем клавиатуру для действий с файлом
+            keyboard = [
+                [InlineKeyboardButton("🤖 GPT Анализ", callback_data='analyze_gpt')],
+                [InlineKeyboardButton("📊 Графики", callback_data='show_charts')],
+                [InlineKeyboardButton("📄 Экспорт отчета", callback_data='export_report')],
+                [InlineKeyboardButton("🔗 AmoCRM", callback_data='connect_amocrm')],
+                [InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
             # Формируем финальное сообщение
             result_text = (
@@ -291,16 +403,14 @@ https://ai-business-auditor.onrender.com
                 f"📋 Колонок: *{len(df.columns)}*\n"
                 f"📈 Числовых колонок: *{len(df.select_dtypes(include='number').columns)}*\n\n"
                 f"{analysis_text}\n\n"
-                f"💡 *Дальнейшие действия:*\n"
-                f"• Используйте веб-интерфейс для графиков\n"
-                f"• Настройте GPT анализ в конфигурации\n"
-                f"• Интегрируйте с AmoCRM для полной аналитики"
+                f"💡 *Выберите дальнейшие действия:*"
             )
 
-            # Отправляем результат
+            # Отправляем результат с кнопками
             await status_msg.edit_text(
                 result_text,
                 parse_mode='Markdown',
+                reply_markup=reply_markup,
                 disable_web_page_preview=True
             )
 
@@ -317,6 +427,8 @@ https://ai-business-auditor.onrender.com
                 error_display = "Ошибка кодировки файла. Используйте UTF-8."
             elif "empty" in error_msg.lower():
                 error_display = "Файл пуст или не содержит данных."
+            elif "Can't parse entities" in error_msg:
+                error_display = "Ошибка форматирования текста. Упростите имя файла."
             else:
                 error_display = error_msg[:200]
 
@@ -330,7 +442,8 @@ https://ai-business-auditor.onrender.com
                     f"1. Корректность формата данных\n"
                     f"2. Кодировку файла (рекомендуется UTF-8)\n"
                     f"3. Разделители в CSV (запятая или точка с запятой)\n"
-                    f"4. Что файл не пустой",
+                    f"4. Что файл не пустой\n"
+                    f"5. Имя файла не содержит спецсимволов",
                     parse_mode='Markdown'
                 )
             except Exception as edit_error:
@@ -340,12 +453,58 @@ https://ai-business-auditor.onrender.com
                 )
 
         finally:
-            # Удаляем временный файл
+            # Удаляем временный файл (но сохраняем DataFrame в памяти)
             if temp_file_path and os.path.exists(temp_file_path):
                 try:
                     os.unlink(temp_file_path)
+                    # Оставляем только DataFrame в памяти
+                    if user_id in user_files:
+                        user_files[user_id]['file_path'] = None
                 except Exception as cleanup_error:
                     logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
+
+    async def gpt_analysis_handler(query, df, file_name, user_id):
+        """Обработчик GPT анализа"""
+        try:
+            await query.edit_message_text(
+                text="🧠 *Запускаю GPT анализ...*\n\nЭто может занять несколько секунд...",
+                parse_mode='Markdown'
+            )
+
+            # Выполняем GPT анализ
+            gpt_result = await perform_gpt_analysis(df, file_name)
+
+            # Создаем клавиатуру для дальнейших действий
+            keyboard = [
+                [InlineKeyboardButton("📊 Графики", callback_data='show_charts')],
+                [InlineKeyboardButton("📄 Экспорт отчета", callback_data='export_report')],
+                [InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(
+                text=f"🤖 *GPT Анализ завершен!*\n\n"
+                     f"📁 Файл: `{file_name}`\n"
+                     f"📊 Записей: {len(df):,}\n\n"
+                     f"{gpt_result}\n\n"
+                     f"💡 *Дальнейшие действия:*",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+
+            logger.info(f"✅ [{user_id}] GPT анализ успешен")
+
+        except Exception as error:
+            logger.error(f"❌ [{user_id}] Ошибка GPT анализа: {error}")
+            await query.edit_message_text(
+                text=f"❌ *Ошибка GPT анализа*\n\n"
+                     f"Причина: {str(error)[:200]}\n\n"
+                     f"*Проверьте:*\n"
+                     f"• Наличие OPENAI_API_KEY\n"
+                     f"• Доступ к интернету\n"
+                     f"• Лимиты OpenAI API",
+                parse_mode='Markdown'
+            )
 
     # Обработка текстовых сообщений
     async def handle_text(update: Update, context: CallbackContext):
@@ -358,12 +517,21 @@ https://ai-business-auditor.onrender.com
         greetings = ['привет', 'hello', 'hi', 'здравствуй', 'добрый день', 'добрый вечер']
 
         if any(greet in text.lower() for greet in greetings):
+            # Создаем клавиатуру
+            keyboard = [
+                [InlineKeyboardButton("📊 Анализ файла", callback_data='analyze_file')],
+                [InlineKeyboardButton("🤖 GPT Анализ", callback_data='analyze_gpt')],
+                [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
             await update.message.reply_text(
                 f"👋 Привет, {update.effective_user.first_name or 'друг'}!\n\n"
                 f"Я AI Business Auditor Bot 🤖\n"
                 f"Отправьте мне файл с данными для анализа (CSV, Excel, JSON)\n\n"
-                f"Используйте /help для справки",
-                parse_mode=None
+                f"Или используйте кнопки ниже:",
+                parse_mode=None,
+                reply_markup=reply_markup
             )
         elif 'спасибо' in text.lower():
             await update.message.reply_text(
@@ -378,20 +546,32 @@ https://ai-business-auditor.onrender.com
                 parse_mode=None
             )
         else:
+            # Создаем клавиатуру
+            keyboard = [
+                [InlineKeyboardButton("📊 Анализ файла", callback_data='analyze_file')],
+                [InlineKeyboardButton("🤖 GPT Анализ", callback_data='analyze_gpt')],
+                [InlineKeyboardButton("📈 Графики", callback_data='show_charts')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
             await update.message.reply_text(
-                "🤔 Я понимаю команды и файлы.\n\n"
+                "🤔 Я понимаю команды, файлы и кнопки.\n\n"
                 "*Доступные команды:*\n"
                 "• /start - Запустить бота\n"
                 "• /help - Справка\n"
                 "• /status - Статус системы\n\n"
-                "*Или просто отправьте файл* с данными для анализа.",
-                parse_mode='Markdown'
+                "*Или используйте кнопки:*",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
             )
 
     # Регистрируем обработчики команд
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
+
+    # Обработчик callback-запросов (кнопки)
+    application.add_handler(CallbackQueryHandler(button_callback))
 
     # Обработчик документов (ВАЖНО: должен быть до текстовых)
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
@@ -402,6 +582,11 @@ https://ai-business-auditor.onrender.com
     # Обработчик ошибок
     async def error_handler(update: Update, context: CallbackContext):
         logger.error(f"Ошибка в обработчике: {context.error}")
+
+        # Логируем детали ошибки
+        if hasattr(context.error, '__dict__'):
+            for key, value in context.error.__dict__.items():
+                logger.error(f"  {key}: {value}")
 
         # Пытаемся отправить сообщение об ошибке пользователю
         if update and update.effective_chat:
@@ -431,140 +616,144 @@ async def load_dataframe(file_path, file_ext):
         elif file_ext in ['xlsx', 'xls']:
             return pd.read_excel(file_path)
         elif file_ext == 'json':
-            return pd.read_json(file_path)
+            return pd.read_json(file_path, orient='records')
         else:
             raise ValueError(f"Неизвестный формат: {file_ext}")
     except Exception as e:
+        logger.error(f"Ошибка чтения файла {file_path}: {e}")
         raise ValueError(f"Ошибка чтения файла: {str(e)}")
 
 async def analyze_dataframe(df, filename):
-    """Анализ DataFrame с GPT и базовой аналитикой"""
+    """Базовый анализ DataFrame"""
     try:
         response = ""
 
-        # Проверяем доступность анализатора
-        try:
-            # Пробуем импортировать из agents
-            sys.path.insert(0, str(root_dir))
-            from agents.analyzer import DataAnalyzer
+        response += "*📊 БАЗОВЫЙ АНАЛИЗ:*\n"
+        response += f"• Дата анализа: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        response += f"• Всего записей: {len(df):,}\n"
+        response += f"• Колонок: {len(df.columns)}\n"
 
-            logger.info("✅ DataAnalyzer найден, запускаю анализ...")
-            analyzer = DataAnalyzer()
+        # Типы данных
+        response += "\n*ТИПЫ ДАННЫХ:*\n"
+        dtypes = df.dtypes.value_counts()
+        for dtype, count in dtypes.items():
+            response += f"• {dtype}: {count} колонок\n"
 
-            # 1. Базовый анализ
-            basic = analyzer.basic_analysis(df)
+        # Основные статистики для числовых колонок
+        numeric_cols = df.select_dtypes(include='number').columns
+        if len(numeric_cols) > 0:
+            response += f"\n*ОСНОВНЫЕ МЕТРИКИ:*\n"
+            for col in numeric_cols[:3]:
+                response += f"• `{col}`:\n"
+                response += f"  Среднее: {df[col].mean():.2f}\n"
+                response += f"  Сумма: {df[col].sum():.2f}\n"
+                response += f"  Мин/Макс: {df[col].min():.2f}/{df[col].max():.2f}\n"
 
-            response += "*📊 БАЗОВЫЙ АНАЛИЗ:*\n"
-            response += f"• Дата анализа: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-            response += f"• Всего записей: {len(df):,}\n"
-            response += f"• Колонок: {len(df.columns)}\n"
-
-            # Добавляем сводку если есть
-            if isinstance(basic, dict) and 'summary' in basic:
-                summary = basic['summary']
-                if summary and len(summary) > 0:
-                    response += f"• Сводка: {summary[:200]}...\n"
-
-            # 2. GPT анализ (если доступен OpenAI)
-            openai_key = os.getenv('OPENAI_API_KEY')
-            if openai_key and openai_key.startswith('sk-'):
-                try:
-                    response += "\n*🤖 GPT АНАЛИЗ:*\n"
-
-                    # Проверяем, есть ли числовые данные для анализа
-                    numeric_cols = df.select_dtypes(include='number').columns
-                    if len(numeric_cols) > 0:
-                        gpt_result = analyzer.gpt_analysis(df)
-
-                        if isinstance(gpt_result, str):
-                            response += f"{gpt_result[:400]}..."
-                        elif isinstance(gpt_result, dict):
-                            # Извлекаем текст из словаря
-                            for key, value in gpt_result.items():
-                                if isinstance(value, str) and len(value) > 0:
-                                    response += f"• {key}: {value[:100]}...\n"
-                        else:
-                            response += "GPT анализ выполнен. Подробности в веб-версии.\n"
-                    else:
-                        response += "⚠️ Для GPT анализа нужны числовые данные\n"
-
-                except Exception as gpt_error:
-                    logger.warning(f"GPT анализ не удался: {gpt_error}")
-                    response += "⚠️ GPT анализ временно недоступен\n"
-            else:
-                response += "\n*⚠️ GPT АНАЛИЗ:*\n"
-                response += "Добавьте OPENAI_API_KEY в настройки Render\n"
-                response += "для доступа к AI рекомендациям\n"
-
-            # 3. Статистика по колонкам
-            numeric_cols = df.select_dtypes(include='number').columns
-            if len(numeric_cols) > 0:
-                response += f"\n*📈 ЧИСЛОВЫЕ КОЛОНКИ ({len(numeric_cols)}):*\n"
-                for i, col in enumerate(numeric_cols[:3]):  # Показываем первые 3
-                    response += f"{i+1}. `{col}`:\n"
-                    response += f"   Среднее: {df[col].mean():.2f}\n"
-                    response += f"   Сумма: {df[col].sum():.2f}\n"
-                    response += f"   Диапазон: {df[col].min():.2f} - {df[col].max():.2f}\n"
-
-                if len(numeric_cols) > 3:
-                    response += f"   ... и еще {len(numeric_cols) - 3} колонок\n"
-
-            # 4. Категориальные колонки
-            categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-            if len(categorical_cols) > 0:
-                response += f"\n*📋 ТЕКСТОВЫЕ КОЛОНКИ ({len(categorical_cols)}):*\n"
-                for i, col in enumerate(categorical_cols[:2]):  # Показываем первые 2
-                    unique_count = df[col].nunique()
-                    response += f"{i+1}. `{col}`: {unique_count} уникальных значений\n"
-
-                if len(categorical_cols) > 2:
-                    response += f"   ... и еще {len(categorical_cols) - 2} колонок\n"
-
-        except ImportError as import_error:
-            logger.warning(f"DataAnalyzer не найден: {import_error}")
-
-            # Простой анализ без DataAnalyzer
-            response += "*📊 ПРОСТОЙ АНАЛИЗ:*\n"
-            response += f"• Файл: {filename}\n"
-            response += f"• Записей: {len(df):,}\n"
-            response += f"• Колонок: {len(df.columns)}\n\n"
-
-            # Типы данных
-            response += "*ТИПЫ ДАННЫХ:*\n"
-            dtypes = df.dtypes.value_counts()
-            for dtype, count in dtypes.items():
-                response += f"• {dtype}: {count} колонок\n"
-
-            # Основные статистики для числовых колонок
-            numeric_cols = df.select_dtypes(include='number').columns
-            if len(numeric_cols) > 0:
-                response += f"\n*ОСНОВНЫЕ МЕТРИКИ:*\n"
-                for col in numeric_cols[:3]:
-                    response += f"• `{col}`:\n"
-                    response += f"  Среднее: {df[col].mean():.2f}\n"
-                    response += f"  Сумма: {df[col].sum():.2f}\n"
-                    response += f"  Мин/Макс: {df[col].min():.2f}/{df[col].max():.2f}\n"
-
-            response += f"\n*💡 Для полного анализа:*\n"
-            response += f"Установите зависимости и настройте DataAnalyzer\n"
-
-        # Добавляем рекомендации
-        response += f"\n*🎯 РЕКОМЕНДАЦИИ:*\n"
-        recommendations = [
-            "1. Используйте веб-интерфейс для графиков",
-            "2. Настройте GPT анализ с OpenAI API",
-            "3. Интегрируйте с AmoCRM для CRM-аналитики",
-            "4. Экспортируйте отчеты в PDF/Excel"
-        ]
-
-        for rec in recommendations:
-            response += f"• {rec}\n"
+        # Категориальные колонки
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+        if len(categorical_cols) > 0:
+            response += f"\n*ТЕКСТОВЫЕ КОЛОНКИ:*\n"
+            for col in categorical_cols[:2]:
+                unique_count = df[col].nunique()
+                response += f"• `{col}`: {unique_count} уникальных значений\n"
 
         return response
 
     except Exception as error:
         logger.error(f"Ошибка анализа DataFrame: {error}")
         return f"⚠️ Ошибка анализа данных: {str(error)[:200]}"
+
+async def perform_gpt_analysis(df, filename):
+    """Выполнение GPT анализа через DataAnalyzer"""
+    try:
+        # Пробуем импортировать DataAnalyzer
+        sys.path.insert(0, str(root_dir))
+
+        # Проверяем доступность OpenAI API
+        openai_key = os.getenv('OPENAI_API_KEY')
+        if not openai_key or not openai_key.startswith('sk-'):
+            return "⚠️ *GPT анализ недоступен*\n\nДобавьте OPENAI_API_KEY в настройках Render"
+
+        try:
+            from agents.analyzer import DataAnalyzer
+
+            analyzer = DataAnalyzer()
+
+            # Выполняем GPT анализ
+            gpt_result = analyzer.gpt_analysis(df)
+
+            if isinstance(gpt_result, str):
+                if len(gpt_result) > 1500:
+                    return f"{gpt_result[:1500]}...\n\n[Продолжение в веб-версии]"
+                return gpt_result
+            elif isinstance(gpt_result, dict):
+                response = "*🤖 GPT Анализ:*\n\n"
+                for key, value in gpt_result.items():
+                    if isinstance(value, str) and value:
+                        response += f"• *{key}:* {value[:200]}...\n"
+                return response
+            else:
+                return "✅ GPT анализ выполнен. Подробности в веб-версии."
+
+        except ImportError:
+            # Если DataAnalyzer не доступен, используем простой OpenAI запрос
+            return await simple_gpt_analysis(df, filename)
+
+    except Exception as error:
+        logger.error(f"Ошибка GPT анализа: {error}")
+        return f"❌ Ошибка GPT анализа: {str(error)[:200]}"
+
+async def simple_gpt_analysis(df, filename):
+    """Простой GPT анализ через OpenAI API напрямую"""
+    try:
+        import openai
+
+        openai_key = os.getenv('OPENAI_API_KEY')
+        if not openai_key:
+            return "⚠️ OpenAI API ключ не настроен"
+
+        # Создаем промпт для анализа
+        numeric_cols = df.select_dtypes(include='number').columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+
+        prompt = f"""
+Проанализируй эти бизнес-данные:
+Файл: {filename}
+Количество записей: {len(df)}
+Колонок: {len(df.columns)}
+
+Числовые колонки: {', '.join(numeric_cols[:5])}
+Текстовые колонки: {', '.join(categorical_cols[:5])}
+
+Основные статистики:
+{df.describe().to_string() if len(numeric_cols) > 0 else 'Нет числовых данных'}
+
+Дайте краткий анализ:
+1. Основные тренды
+2. Потенциальные проблемы
+3. Рекомендации по оптимизации
+4. Ключевые метрики
+
+Ответ должен быть кратким и по делу.
+"""
+
+        client = openai.OpenAI(api_key=openai_key)
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ты AI бизнес-аналитик. Анализируй данные и давай практические рекомендации."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
+
+        return response.choices[0].message.content
+
+    except Exception as error:
+        logger.error(f"Ошибка простого GPT анализа: {error}")
+        return f"⚠️ Ошибка при обращении к OpenAI API: {str(error)[:200]}"
 
 if __name__ == "__main__":
     # Проверяем наличие обязательных переменных

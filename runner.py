@@ -15,6 +15,9 @@ import signal
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 
+# ДОБАВЛЯЕМ ЭТО для корректных импортов
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -137,7 +140,7 @@ def run_streamlit():
 
 
 def run_telegram_bot():
-    """Запуск Telegram бота"""
+    """Запуск Telegram бота - ОСНОВНОЕ ИСПРАВЛЕНИЕ"""
     logger.info("🤖 Запуск Telegram бота...")
 
     # Проверяем, есть ли токен бота
@@ -145,7 +148,56 @@ def run_telegram_bot():
         logger.warning("⚠️ TELEGRAM_BOT_TOKEN не установлен, бот не будет запущен")
         return None
 
-    cmd = ["python", "integrations/telegram/gpt_bot.py"]
+    # ВАЖНО: запускаем бот в ОТДЕЛЬНОМ процессе Python
+    # чтобы избежать проблем с event loop и импортами
+    cmd = [sys.executable, "-c", """
+import sys
+import os
+import asyncio
+import logging
+
+# Добавляем корневую директорию в путь
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+async def main():
+    try:
+        # Теперь импорты должны работать
+        from integrations.telegram.gpt_bot import main as bot_main
+        await bot_main()
+    except ImportError as e:
+        logger.error(f"❌ Ошибка импорта: {e}")
+        logger.error(f"Python path: {sys.path}")
+        logger.error(f"Current dir: {os.getcwd()}")
+        logger.error(f"Files in integrations/: {os.listdir('integrations') if os.path.exists('integrations') else 'No integrations dir'}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка бота: {e}")
+        raise
+
+if __name__ == "__main__":
+    # Создаем event loop для этого потока
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Бот остановлен")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+    finally:
+        loop.close()
+"""]
 
     try:
         process = subprocess.Popen(
@@ -154,7 +206,8 @@ def run_telegram_bot():
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            cwd="/app"  # Указываем рабочую директорию
         )
 
         def log_stream(stream, stream_type):
@@ -165,14 +218,15 @@ def run_telegram_bot():
         threading.Thread(target=log_stream, args=(process.stdout, "STDOUT"), daemon=True).start()
         threading.Thread(target=log_stream, args=(process.stderr, "STDERR"), daemon=True).start()
 
-        # Даем время на запуск
-        time.sleep(3)
+        # Даем больше времени на запуск
+        time.sleep(10)
 
         if process.poll() is None:
             logger.info("✅ Telegram бот успешно запущен")
             return process
         else:
             logger.error("❌ Telegram бот завершился при запуске")
+            # Попробуем получить ошибку из stderr
             return None
 
     except Exception as e:
@@ -222,6 +276,10 @@ def main():
                 logger.info(f"Остановка {name}...")
                 if hasattr(process, 'terminate'):
                     process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except:
+                        pass
                 elif hasattr(process, 'shutdown'):
                     process.shutdown()
         sys.exit(0)
@@ -258,6 +316,9 @@ def main():
         # Streamlit
         if streamlit_process:
             status_messages.append("✅ Веб-интерфейс: http://localhost:8501")
+            # Добавляем публичный URL для Render
+            public_url = os.getenv('RENDER_EXTERNAL_URL', 'https://ai-business-auditor.onrender.com')
+            status_messages.append(f"🌐 Публичный URL: {public_url}")
         else:
             status_messages.append("⚠️ Веб-интерфейс: требуется проверка")
 

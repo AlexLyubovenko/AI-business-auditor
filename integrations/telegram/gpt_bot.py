@@ -12,6 +12,24 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+# Импорт telegram модулей ДО main функции
+try:
+    from telegram import Update
+    from telegram.ext import (
+        Application,
+        CommandHandler,
+        MessageHandler,
+        filters,
+        ContextTypes,
+        CallbackContext
+    )
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.error("❌ python-telegram-bot не установлен")
+    logger.error("Выполните: pip install python-telegram-bot==20.7")
+
 # ДОБАВЛЯЕМ ПУТИ для корректных импортов
 current_dir = Path(__file__).parent.absolute()
 root_dir = current_dir.parent.parent
@@ -44,15 +62,9 @@ async def main():
             logger.info("💡 Добавьте TELEGRAM_BOT_TOKEN в настройках Render")
             return
 
-        # Импортируем telegram модули ВНУТРИ функции
-        from telegram import Update
-        from telegram.ext import (
-            Application,
-            CommandHandler,
-            MessageHandler,
-            filters,
-            ContextTypes
-        )
+        if not TELEGRAM_AVAILABLE:
+            logger.error("❌ python-telegram-bot не установлен")
+            return
 
         # Создаем приложение
         application = Application.builder().token(token).build()
@@ -82,22 +94,14 @@ async def main():
         while True:
             await asyncio.sleep(3600)
 
-    except ImportError as e:
-        logger.error(f"❌ Ошибка импорта: {e}")
-        logger.error("Убедитесь, что установлен python-telegram-bot==20.7")
-        logger.error("Выполните: pip install python-telegram-bot==20.7")
-        raise
     except Exception as e:
         logger.error(f"❌ Критическая ошибка бота: {e}")
         raise
 
 async def setup_handlers(application):
     """Настройка всех обработчиков"""
-    from telegram import Update
-    from telegram.ext import ContextTypes
-
     # Команда /start
-    async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def start_command(update: Update, context: CallbackContext):
         user = update.effective_user
         logger.info(f"👤 Пользователь {user.id} ({user.username}) запустил бота")
 
@@ -135,7 +139,7 @@ async def setup_handlers(application):
         )
 
     # Команда /help
-    async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def help_command(update: Update, context: CallbackContext):
         help_text = """
 *Помощь по AI Business Auditor Bot*
 
@@ -175,7 +179,7 @@ https://ai-business-auditor.onrender.com
         )
 
     # Команда /status
-    async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def status_command(update: Update, context: CallbackContext):
         user = update.effective_user
 
         # Проверяем доступность сервисов
@@ -216,7 +220,7 @@ https://ai-business-auditor.onrender.com
         )
 
     # Обработка файлов
-    async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_document(update: Update, context: CallbackContext):
         user_id = update.effective_user.id
         user_name = update.effective_user.username or update.effective_user.first_name
         document = update.message.document
@@ -344,7 +348,7 @@ https://ai-business-auditor.onrender.com
                     logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
 
     # Обработка текстовых сообщений
-    async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_text(update: Update, context: CallbackContext):
         text = update.message.text
         user_id = update.effective_user.id
 
@@ -396,7 +400,7 @@ https://ai-business-auditor.onrender.com
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     # Обработчик ошибок
-    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def error_handler(update: Update, context: CallbackContext):
         logger.error(f"Ошибка в обработчике: {context.error}")
 
         # Пытаемся отправить сообщение об ошибке пользователю
